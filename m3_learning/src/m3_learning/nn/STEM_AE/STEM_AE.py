@@ -513,7 +513,7 @@ class VariationalAutoencoder(ConvAutoencoder):
             if scheduler is not None:
                 scheduler.step()
 
-    def load_weights(self, path_checkpoint,return_checkpoint=False,embedding_h5_filepath=''):
+    def load_weights(self, path_checkpoint,return_checkpoint=False,embedding_h5_filepath='', device="cpu"):
         """loads the weights from a checkpoint
 
         Args:
@@ -524,7 +524,10 @@ class VariationalAutoencoder(ConvAutoencoder):
         Returns:
             checkpoint (Optional)
         """
-        checkpoint = torch.load(path_checkpoint)
+        if device == "cpu":
+            checkpoint = torch.load(path_checkpoint, map_location=torch.device('cpu'))
+        else:
+            checkpoint = torch.load(path_checkpoint)
         self.autoencoder.load_state_dict(checkpoint['net'])
         self.encoder.load_state_dict(checkpoint['encoder'])
         self.decoder.load_state_dict(checkpoint['decoder'])
@@ -563,14 +566,37 @@ class VariationalAutoencoder(ConvAutoencoder):
         if embedding_==None:
             embedding_ = np.zeros(
                 [data.shape[0]*data.shape[1], self.embedding_size])
-            
-        for i, x in enumerate(tqdm(dataloader, leave=True, total=len(dataloader))):
-            with torch.no_grad():
-                value = x
-                test_value = Variable(value.to(self.device))
-                test_value = test_value.float()
-                embedding,mn,sd = self.encoder(test_value)
-                embedding_[i*batch_size:(i+1)*batch_size, :] = embedding.to('cpu').detach().numpy()
+
+        # drop-in patch
+        from tqdm.auto import tqdm
+        self.encoder.eval()
+        cursor = 0
+        with torch.inference_mode():
+            for test_value in tqdm(dataloader, desc="Embedding batches"):
+                emb = self.encoder(test_value.float())[0]
+                emb_np = emb.cpu().numpy()
+                rows = emb_np.shape[0]
+
+                if cursor + rows > embedding_.shape[0]:
+                    embedding_.resize((cursor + rows, emb_np.shape[1]))
+
+                embedding_[cursor:cursor + rows, :] = emb_np
+                cursor += rows
+
+        # for i, x in enumerate(tqdm(dataloader, leave=True, total=len(dataloader))):
+        #     with torch.no_grad():
+        #         value = x
+        #         test_value = Variable(value.to(self.device))
+        #         test_value = test_value.float()
+        #         embedding,mn,sd = self.encoder(test_value)
+        #         print(
+        #             f"loop i={i}, "
+        #             f"embedding.shape={embedding.shape}, "
+        #             f"batch_size={batch_size}, "
+        #             f"target slice rows={embedding_[i * batch_size:(i + 1) * batch_size].shape[0]}"
+        #         )
+        #
+        #         embedding_[i*batch_size:(i+1)*batch_size, :] = embedding.to('cpu').detach().numpy()
 
         self.embedding = embedding_[:]
 
@@ -596,17 +622,35 @@ class VariationalAutoencoder(ConvAutoencoder):
                     continue # skip names already written
                 
                 checkpoint = self.load_weights(checkpoint_path, return_checkpoint=True)
-                
+
+                # drop-in patch
                 try:
-                    embedding_dataset = h.create_dataset(check_name,shape=(input_data.shape[0]*input_data.shape[1], 
-                                                            self.embedding_size))
-                except:
+                    # ──────────────────────────────────────────────────────────────────
+                    # Create an *empty*, resizable, chunked dataset
+                    latent = self.embedding_size
+                    embedding_dataset = h.create_dataset(
+                        check_name,
+                        shape=(0, latent),  # start with zero rows
+                        maxshape=(None, latent),  # unlimited first axis
+                        chunks=(batch_size, latent),  # 1 chunk ≈ one encoder batch
+                        dtype="float32",  # or whatever you need
+                        compression="gzip", compression_opts=4  # optional but handy
+                    )
+                    # ──────────────────────────────────────────────────────────────────
+                except Exception:
+                    # already exists (and may be chunked from a previous run)
                     embedding_dataset = h[check_name]
+
+                # try:
+                #     embedding_dataset = h.create_dataset(check_name,shape=(input_data.shape[0]*input_data.shape[1],
+                #                                             self.embedding_size))
+                # except:
+                #     embedding_dataset = h[check_name]
                 
                 embedding_dataset.attrs['epoch'] = checkpoint['epoch']
                 embedding_dataset.attrs['beta'] = checkpoint['beta']
                 
-                embedding_ = self.get_embedding(input_data, embedding_=embedding_dataset)
+                embedding_ = self.get_embedding(input_data, embedding_=embedding_dataset, batch_size=batch_size)
                 
     
 class ConvBlock(nn.Module):
