@@ -10,6 +10,7 @@ torch
 torchvision
 torchaudio
 tensorflow
+lightning
 jupyter
 autopep8
 seaborn
