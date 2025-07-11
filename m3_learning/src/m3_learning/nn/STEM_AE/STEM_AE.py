@@ -122,7 +122,7 @@ class ConvAutoencoder():
 
         # builds the dataloader
         self.DataLoader_ = DataLoader(
-            data.reshape(-1, 256, 256), batch_size=batch_size, shuffle=True)
+            data.reshape(-1, 512, 512), batch_size=batch_size, shuffle=True)
 
         # option to use the learning rate scheduler
         if with_scheduler:
@@ -951,7 +951,17 @@ class Encoder(nn.Module):
         Returns:
             Tensor: output tensor
         """
-        out = x.view(-1, 1, self.input_size_0, self.input_size_1)
+        # out = x.view(-1, 1, self.input_size_0, self.input_size_1)
+
+        # x is (B, 512, 512)  ⇒ add channel
+        # x is (B,   1, 512, 512) ⇒ leave as-is
+        if x.dim() == 3:          # (B, H, W)
+            out = x.unsqueeze(1)  # (B, 1, H, W)
+        elif x.dim() == 4:        # (B, 1, H, W)
+            out = x
+        else:
+            raise ValueError(f"Unexpected input shape {x.shape}")
+        
         out = self.cov2d(out)
         for i in range(self.layers):
             out = self.block_layer[i](out)
