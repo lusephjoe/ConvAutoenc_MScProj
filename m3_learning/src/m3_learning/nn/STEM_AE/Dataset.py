@@ -25,6 +25,17 @@ class STEM_Dataset:
         # sets the log data
         self.log_data = s
 
+    def __len__(self):
+        # total number of diffraction patterns = Ny × Nx
+        return self.data.shape[0] * self.data.shape[1]
+
+    def __getitem__(self, idx):
+        """Return one (H, W) pattern by flat index."""
+        Ny = self.data.shape[0]
+        row = idx // Ny
+        col = idx %  Ny
+        return self.data[row, col]          # shape (512, 512)
+
     @property
     def log_data(self):
         return self._log_data

@@ -1,30 +1,44 @@
 pyNSID
 sidpy
 py-cpuinfo
-datafed
-jupyter-book
-protobuf == 3.20.3
+# datafed
+# jupyter-book
+# protobuf == 3.20.3
 BGlib
 hyperspy
 torch
-torchvision
-torchaudio
+# torchvision
+# torchaudio
 tensorflow
 lightning
-jupyter
-autopep8
+# jupyter
+# autopep8
 seaborn
 wget
-zenodopy
+# zenodopy
 pycroscopy
 scikit-image
 scikit-learn
 matplotlib
-jupyter
-zenodopy==0.3.0
+# jupyter
+# zenodopy==0.3.0
 opencv-python
 imageio==2.22.3
 xrayutilities
+pyUSID
+numpy
+h5py
+scipy
+tqdm
+dask
+Pillow
+imutils
+plotly
+pandas
+joblib
+pygments
+IPython
+
 
 
 # autopep8
