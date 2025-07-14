@@ -122,7 +122,7 @@ class ConvAutoencoder():
 
         # builds the dataloader
         self.DataLoader_ = DataLoader(
-            data.reshape(-1, 512, 512), batch_size=batch_size, shuffle=True)
+            data.reshape(-1, 256, 256), batch_size=batch_size, shuffle=True)
 
         # option to use the learning rate scheduler
         if with_scheduler:
@@ -168,8 +168,8 @@ class ConvAutoencoder():
                 if epoch >= 0:
                     lr_ = format(self.optimizer.param_groups[0]['lr'], '.5f')
                     file_path = folder_path + '/Weight_' +\
-                        f'epoch_{epoch:04d}_l1coef_{coef_1:.4f}'+'_lr_'+lr_ +\
-                        f'_trainloss_{train_loss:.4f}.pkl'
+                        f'epoch:{epoch:04d}_l1coef:{coef_1:.4f}'+'_lr:'+lr_ +\
+                        f'_trainloss:{train_loss:.4f}.pkl'
                     torch.save(checkpoint, file_path)
 
             if scheduler is not None:
@@ -261,167 +261,34 @@ class ConvAutoencoder():
         
         if return_checkpoint: return checkpoint
 
-    # def get_embedding(self,
-    # data: torch.Tensor,
-    # batch_size: int = 32,
-    # return_numpy: bool = True,   # toggle to keep result on GPU
-    # ) -> torch.Tensor | np.ndarray:
-    #     """
-    #     Extract embeddings for an (N, T, C, L) tensor of sequences
-    #     and return them as a flat (N·T, E) array/tensor.
-    #     """
+    def get_embedding(self, data, batch_size=32):
+        """extracts embeddings from the data
 
-    #     # -- prepare ----------------------------------------------------------------
-    #     dataset = data.reshape(-1, data.shape[2], data.shape[3])       # (N·T, C, L)
-    #     loader  = DataLoader(
-    #         dataset,
-    #         batch_size=batch_size,
-    #         shuffle=False,
-    #         pin_memory=True,            # faster H2D copies
-    #     )
+        Args:
+            data (torch.tensor): data to get embeddings from
+            batch_size (int, optional): batchsize for inference. Defaults to 32.
 
-    #     # You can either pre-allocate or build a list and cat:
-    #     embeddings_gpu = torch.empty(
-    #         (dataset.shape[0], self.embedding_size),
-    #         dtype=torch.float32,
-    #         device=self.device,         # stays on GPU
-    #     )
-
-    #     pos = 0
-    #     self.encoder.eval()
-    #     with torch.no_grad(), torch.cuda.amp.autocast():               # mixed precision
-    #         for x in tqdm(loader, total=len(loader), desc="Encoding"):
-    #             x = x.to(self.device, non_blocking=True).float()       # H2D copy once
-    #             emb = self.encoder(x)                                  # (B′, E) on GPU
-
-    #             # write straight into the pre-allocated buffer
-    #             b = emb.size(0)
-    #             embeddings_gpu[pos : pos + b] = emb
-    #             pos += b
-
-    #     self.embedding = embeddings_gpu                                # keep on GPU
-
-    #     if return_numpy:
-    #         # one big D2H copy *after* the loop
-    #         return embeddings_gpu.cpu().numpy()
-    #     else:
-    #         return embeddings_gpu
-
-    
-    def get_multi_embeddings(
-        self,
-        data: torch.Tensor,
-        batch_size: int = 32,
-        embedding_: np.ndarray | None = None,
-        ) -> np.ndarray:
+        Returns:
+            torch.tensor: predicted embeddings
         """
-        Encode a 4-D STEM data block and return *all* latent vectors.
 
-        Parameters
-        ----------
-        data : torch.Tensor
-            Shape (B_scan, T_patterns, H, W).
-        batch_size : int, default 32
-        embedding_ : np.ndarray or h5py.Dataset, optional
-            Pre-allocated target to write into.  If supplied, its first
-            dimension must equal ``B_scan * T_patterns * n_per_input`` —
-            the function will raise if the shape is incompatible.
+        # builds the dataloader
+        dataloader = DataLoader(
+            data.reshape(-1, data.shape[2], data.shape[3]), batch_size, shuffle=False)
 
-        Returns
-        -------
-        np.ndarray
-            Shape (B_scan * T_patterns * n_per_input, embedding_size).
-            Exactly identical object if `embedding_` was provided.
-        """
-        # --- 1. flatten scan-/time-axis -----------------------------------------
-        dataset = data.reshape(-1, data.shape[2], data.shape[3])        # (N, H, W)
-        loader  = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        embedding_ = np.zeros(
+            [data.shape[0]*data.shape[1], self.embedding_size])
+        for i, x in enumerate(tqdm(dataloader, leave=True, total=len(dataloader))):
+            with torch.no_grad():
+                value = x
+                test_value = Variable(value.to(self.device))
+                test_value = test_value.float()
+                embedding = self.encoder(test_value).to('cpu').detach().numpy()
+                embedding_[i*batch_size:(i+1)*batch_size, :] = embedding
 
-        self.encoder.eval()
-        pos             = 0
-        n_per_input     = None   # will discover on first batch
-        embeddings_out  = None   # final target (embedding_ or freshly allocated)
+        self.embedding = embedding_
 
-        with torch.no_grad():
-            for x in tqdm(loader, total=len(loader), desc="Encoding"):
-                # forward ---------------------------------------------------------
-                emb = self.encoder(x.to(self.device).float()).cpu().numpy()  # (B' , E)
-
-                # --- 2. first batch --> figure out multiplier, allocate ----------
-                if n_per_input is None:
-                    n_per_input = emb.shape[0] // x.shape[0]          # e.g. 4
-                    total_rows  = dataset.shape[0] * n_per_input
-
-                    if embedding_ is None:
-                        embeddings_out = np.empty((total_rows, self.embedding_size),
-                                                dtype=np.float32)
-                    else:
-                        if (embedding_.shape[0] != total_rows
-                            or embedding_.shape[1] != self.embedding_size):
-                            raise ValueError(
-                                f"`embedding_` has shape {embedding_.shape}, "
-                                f"expected ({total_rows}, {self.embedding_size})"
-                            )
-                        embeddings_out = embedding_
-
-                # --- 3. copy into target ----------------------------------------
-                embeddings_out[pos : pos + emb.shape[0]] = emb
-                pos += emb.shape[0]
-
-        self.embedding = embeddings_out        # keep for later inspection
-        return embeddings_out
-
-    def get_embedding(self, data: torch.Tensor, batch_size: int = 32) -> torch.Tensor:
-        # build dataloader that iterates over the *flattened* B×T dimension
-        print("Yeah baby, yeah!")
-        dataset  = data.reshape(-1, data.shape[2], data.shape[3])
-        loader   = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
-        embeddings = np.empty((dataset.shape[0], self.embedding_size), dtype=np.float32)
-        pos = 0                                              # running write index
-
-        self.encoder.eval()                                  # turn off dropout / BN
-        with torch.no_grad():
-            for x in tqdm(loader, total=len(loader)):
-                emb = self.encoder(x.to(self.device).float())   # (B', E)
-                emb = emb.cpu().numpy()
-
-                embeddings[pos : pos + emb.shape[0]] = emb     # use real length
-                pos += emb.shape[0]
-
-        self.embedding = embeddings
-        return embeddings
-
-
-    
-    # def get_embedding(self, data: torch.Tensor, batch_size=32) -> torch.Tensor:
-    #     """extracts embeddings from the data
-
-    #     Args:
-    #         data (torch.tensor): data to get embeddings from
-    #         batch_size (int, optional): batchsize for inference. Defaults to 32.
-
-    #     Returns:
-    #         torch.tensor: predicted embeddings
-    #     """
-
-    #     # builds the dataloader
-    #     dataloader = DataLoader(
-    #         data.reshape(-1, data.shape[2], data.shape[3]), batch_size, shuffle=False)
-
-    #     embedding_ = np.zeros(
-    #         [data.shape[0]*data.shape[1], self.embedding_size])
-    #     for i, x in enumerate(tqdm(dataloader, leave=True, total=len(dataloader))):
-    #         with torch.no_grad():
-    #             value = x
-    #             test_value = Variable(value.to(self.device))
-    #             test_value = test_value.float()
-    #             embedding = self.encoder(test_value).to('cpu').detach().numpy()
-    #             embedding_[i*batch_size:(i+1)*batch_size, :] = embedding
-
-    #     self.embedding = embedding_
-
-    #     return embedding_
+        return embedding_
 
     def generate_spectra(self, embedding):
         """generates spectra from embeddings
@@ -646,7 +513,7 @@ class VariationalAutoencoder(ConvAutoencoder):
             if scheduler is not None:
                 scheduler.step()
 
-    def load_weights(self, path_checkpoint,return_checkpoint=False,embedding_h5_filepath='', device="cpu"):
+    def load_weights(self, path_checkpoint,return_checkpoint=False,embedding_h5_filepath=''):
         """loads the weights from a checkpoint
 
         Args:
@@ -657,10 +524,7 @@ class VariationalAutoencoder(ConvAutoencoder):
         Returns:
             checkpoint (Optional)
         """
-        if device == "cpu":
-            checkpoint = torch.load(path_checkpoint, map_location=torch.device('cpu'))
-        else:
-            checkpoint = torch.load(path_checkpoint)
+        checkpoint = torch.load(path_checkpoint)
         self.autoencoder.load_state_dict(checkpoint['net'])
         self.encoder.load_state_dict(checkpoint['encoder'])
         self.decoder.load_state_dict(checkpoint['decoder'])
@@ -699,37 +563,14 @@ class VariationalAutoencoder(ConvAutoencoder):
         if embedding_==None:
             embedding_ = np.zeros(
                 [data.shape[0]*data.shape[1], self.embedding_size])
-
-        # drop-in patch
-        from tqdm.auto import tqdm
-        self.encoder.eval()
-        cursor = 0
-        with torch.inference_mode():
-            for test_value in tqdm(dataloader, desc="Embedding batches"):
-                emb = self.encoder(test_value.float())[0]
-                emb_np = emb.cpu().numpy()
-                rows = emb_np.shape[0]
-
-                if cursor + rows > embedding_.shape[0]:
-                    embedding_.resize((cursor + rows, emb_np.shape[1]))
-
-                embedding_[cursor:cursor + rows, :] = emb_np
-                cursor += rows
-
-        # for i, x in enumerate(tqdm(dataloader, leave=True, total=len(dataloader))):
-        #     with torch.no_grad():
-        #         value = x
-        #         test_value = Variable(value.to(self.device))
-        #         test_value = test_value.float()
-        #         embedding,mn,sd = self.encoder(test_value)
-        #         print(
-        #             f"loop i={i}, "
-        #             f"embedding.shape={embedding.shape}, "
-        #             f"batch_size={batch_size}, "
-        #             f"target slice rows={embedding_[i * batch_size:(i + 1) * batch_size].shape[0]}"
-        #         )
-        #
-        #         embedding_[i*batch_size:(i+1)*batch_size, :] = embedding.to('cpu').detach().numpy()
+            
+        for i, x in enumerate(tqdm(dataloader, leave=True, total=len(dataloader))):
+            with torch.no_grad():
+                value = x
+                test_value = Variable(value.to(self.device))
+                test_value = test_value.float()
+                embedding,mn,sd = self.encoder(test_value)
+                embedding_[i*batch_size:(i+1)*batch_size, :] = embedding.to('cpu').detach().numpy()
 
         self.embedding = embedding_[:]
 
@@ -755,35 +596,17 @@ class VariationalAutoencoder(ConvAutoencoder):
                     continue # skip names already written
                 
                 checkpoint = self.load_weights(checkpoint_path, return_checkpoint=True)
-
-                # drop-in patch
+                
                 try:
-                    # ──────────────────────────────────────────────────────────────────
-                    # Create an *empty*, resizable, chunked dataset
-                    latent = self.embedding_size
-                    embedding_dataset = h.create_dataset(
-                        check_name,
-                        shape=(0, latent),  # start with zero rows
-                        maxshape=(None, latent),  # unlimited first axis
-                        chunks=(batch_size, latent),  # 1 chunk ≈ one encoder batch
-                        dtype="float32",  # or whatever you need
-                        compression="gzip", compression_opts=4  # optional but handy
-                    )
-                    # ──────────────────────────────────────────────────────────────────
-                except Exception:
-                    # already exists (and may be chunked from a previous run)
+                    embedding_dataset = h.create_dataset(check_name,shape=(input_data.shape[0]*input_data.shape[1], 
+                                                            self.embedding_size))
+                except:
                     embedding_dataset = h[check_name]
-
-                # try:
-                #     embedding_dataset = h.create_dataset(check_name,shape=(input_data.shape[0]*input_data.shape[1],
-                #                                             self.embedding_size))
-                # except:
-                #     embedding_dataset = h[check_name]
                 
                 embedding_dataset.attrs['epoch'] = checkpoint['epoch']
                 embedding_dataset.attrs['beta'] = checkpoint['beta']
                 
-                embedding_ = self.get_embedding(input_data, embedding_=embedding_dataset, batch_size=batch_size)
+                embedding_ = self.get_embedding(input_data, embedding_=embedding_dataset)
                 
     
 class ConvBlock(nn.Module):
@@ -931,16 +754,12 @@ class Encoder(nn.Module):
             1, conv_size, 3, stride=1, padding=1, padding_mode="zeros"
         )
         self.cov2d_1 = nn.Conv2d(
-            conv_size, conv_size, 3, stride=1, padding=1, padding_mode="zeros"
+            conv_size, 1, 3, stride=1, padding=1, padding_mode="zeros"
         )
 
         self.relu_1 = nn.ReLU()
 
-        # experimental, to remove 8x8 spatial grid
-        self.global_pool = nn.AdaptiveAvgPool2d((1,1))
-
-        self.dense = nn.Linear(conv_size, embedding_size)
-        # self.dense = nn.Linear(input_size, embedding_size)
+        self.dense = nn.Linear(input_size, embedding_size)
 
     def forward(self, x):
         """Forward pass of the encoder
@@ -951,30 +770,12 @@ class Encoder(nn.Module):
         Returns:
             Tensor: output tensor
         """
-        # out = x.view(-1, 1, self.input_size_0, self.input_size_1)
-
-        # x is (B, 512, 512)  ⇒ add channel
-        # x is (B,   1, 512, 512) ⇒ leave as-is
-        if x.dim() == 3:          # (B, H, W)
-            out = x.unsqueeze(1)  # (B, 1, H, W)
-        elif x.dim() == 4:        # (B, 1, H, W)
-            out = x
-        else:
-            raise ValueError(f"Unexpected input shape {x.shape}")
-        
+        out = x.view(-1, 1, self.input_size_0, self.input_size_1)
         out = self.cov2d(out)
         for i in range(self.layers):
             out = self.block_layer[i](out)
-
-        # commented out for experiment
         out = self.cov2d_1(out)
-
-        # experimental, to remove 8x8 spatial grid
-        out = self.global_pool(out)
-
-        # out = torch.flatten(out, start_dim=1)
-        out = out.view(out.size(0), -1)
-        
+        out = torch.flatten(out, start_dim=1)
         out = self.dense(out)
         selection = self.relu_1(out)
         # mu = self.set_mean(selection)
