@@ -31,10 +31,20 @@ class ConvBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         identity = self.skip_connection(x)
         
-        # Three sequential conv layers
-        out = self.relu(self.bn1(self.conv1(x)))
-        out = self.relu(self.bn2(self.conv2(out)))
-        out = self.bn3(self.conv3(out))
+        # Three sequential conv layers with conditional batch norm
+        out = self.conv1(x)
+        if out.size(-1) > 1 or out.size(-2) > 1:  # Only apply batch norm if spatial dims > 1x1
+            out = self.bn1(out)
+        out = self.relu(out)
+        
+        out = self.conv2(out)
+        if out.size(-1) > 1 or out.size(-2) > 1:
+            out = self.bn2(out)
+        out = self.relu(out)
+        
+        out = self.conv3(out)
+        if out.size(-1) > 1 or out.size(-2) > 1:
+            out = self.bn3(out)
         
         # Add skip connection
         out += identity
@@ -54,23 +64,33 @@ class IdentityBlock(nn.Module):
         self.relu = nn.ReLU(inplace=True)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.relu(self.bn(self.conv(x)))
+        out = self.conv(x)
+        if out.size(-1) > 1 or out.size(-2) > 1:  # Only apply batch norm if spatial dims > 1x1
+            out = self.bn(out)
+        return self.relu(out)
 
 
 class ResNetBlock(nn.Module):
-    """Complete ResNet block with ConvBlock + IdentityBlock + MaxPool2d sequence."""
+    """Complete ResNet block with ConvBlock + IdentityBlock + adaptive pooling sequence."""
     
     def __init__(self, in_channels: int, out_channels: int = 128, pool_size: int = 2):
         super().__init__()
         
         self.conv_block = ConvBlock(in_channels, out_channels)
         self.identity_block = IdentityBlock(out_channels)
-        self.pool = nn.MaxPool2d(pool_size)
+        self.pool_size = pool_size
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv_block(x)
         x = self.identity_block(x)
-        x = self.pool(x)
+        
+        # Calculate target size - ensure it's at least 1x1
+        current_size = x.size(-1)
+        target_size = max(1, current_size // self.pool_size)
+        
+        # Use adaptive pooling for size-agnostic processing
+        x = F.adaptive_avg_pool2d(x, (target_size, target_size))
+        
         return x
 
 
@@ -105,18 +125,18 @@ class EmbeddingLayer(nn.Module):
 
 
 class AdaptiveDecoder(nn.Module):
-    """Adaptive decoder that handles different input sizes."""
+    """Adaptive decoder that handles different input sizes with fixed parameter count."""
     
     def __init__(self, latent_dim: int = 32, target_size: int = 256):
         super().__init__()
         
         self.target_size = target_size
         
-        # Calculate the size after 3 downsampling operations (4x each)
-        self.base_size = target_size // (4 ** 3)  # 256 -> 64 -> 16 -> 4 for 256x256
-        self.base_features = self.base_size * self.base_size * 128
+        # Use fixed base size for consistent parameters across different target sizes
+        self.base_size = 4  # Always start from 4x4
+        self.base_features = self.base_size * self.base_size * 128  # 4*4*128 = 2048
         
-        # Linear layer to expand latent to feature map
+        # Linear layer to expand latent to feature map - fixed size
         self.linear = nn.Linear(latent_dim, self.base_features)
         
         # Initial conv layer
@@ -134,12 +154,16 @@ class AdaptiveDecoder(nn.Module):
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         batch_size = z.shape[0]
         
-        # Expand latent to feature map
+        # Expand latent to fixed 4x4 feature map
         x = self.linear(z)
         x = x.view(batch_size, 128, self.base_size, self.base_size)
         
-        # Initial conv
-        x = self.conv_initial(x)
+        # Initial conv - ensure we don't get 0x0 tensors
+        if x.size(-1) > 0 and x.size(-2) > 0:
+            x = self.conv_initial(x)
+        else:
+            # Fallback for edge cases
+            x = torch.zeros(batch_size, 128, 4, 4, device=z.device, dtype=z.dtype)
         
         # Three upsampling blocks
         x = self.resnet_up1(x)
@@ -196,7 +220,6 @@ class DivergenceLoss(nn.Module):
     
     def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
         # Encourage different activations across the batch
-        mean_activations = torch.mean(embeddings, dim=0)
         # Penalize if activations are too similar across batch
         variance = torch.var(embeddings, dim=0)
         return torch.mean(1.0 / (variance + 1e-8))

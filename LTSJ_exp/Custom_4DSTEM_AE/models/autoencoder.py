@@ -50,9 +50,16 @@ class Encoder(nn.Module):
         x = self.resnet2(x)
         x = self.resnet3(x)
         
-        # Additional final conv layers
-        x = self.relu_post(self.bn_post(self.conv_post(x)))
-        x = self.relu_final(self.bn_final(self.conv_final(x)))
+        # Additional final conv layers with conditional batch norm
+        x = self.conv_post(x)
+        if x.size(-1) > 1 or x.size(-2) > 1:  # Only apply batch norm if spatial dims > 1x1
+            x = self.bn_post(x)
+        x = self.relu_post(x)
+        
+        x = self.conv_final(x)
+        if x.size(-1) > 1 or x.size(-2) > 1:
+            x = self.bn_final(x)
+        x = self.relu_final(x)
         
         # Adaptive pooling for size-agnostic processing
         x = self.adaptive_pool(x)
