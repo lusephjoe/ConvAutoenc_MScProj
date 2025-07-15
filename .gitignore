@@ -181,3 +181,4 @@ m3_learning/.venv_dev
 .venv_nb
 .venv
 dev-requirements.txt
+LTSJ_exp/Custom_4DSTEM_AE/outputs
