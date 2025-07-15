@@ -25,8 +25,9 @@ from scipy.ndimage import gaussian_filter
 # ─────────────────────────── helpers ────────────────────────────
 
 def normalise(x: np.ndarray) -> np.ndarray:
-    """Scale array to [0,1] float32"""
+    """Scale array to [0,1] float32 with log scaling"""
     x = x.astype("float32", copy=False)
+    x = np.log(x + 1e-6)  # Log scaling with small epsilon to avoid log(0)
     x -= x.min()
     x /= x.max() + 1e-6
     return x

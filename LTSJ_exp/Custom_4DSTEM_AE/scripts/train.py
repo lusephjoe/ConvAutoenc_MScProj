@@ -90,9 +90,9 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--summary", type=bool, default=True)
     p.add_argument("--realtime_metrics", action="store_true", help="Enable real-time metrics calculation during training (may slow down training)")
-    p.add_argument("--lambda_act", type=float, default=1e-4, help="L1 regularization coefficient for sparsity")
-    p.add_argument("--lambda_sim", type=float, default=5e-5, help="Contrastive similarity regularization coefficient")
-    p.add_argument("--lambda_div", type=float, default=2e-4, help="Activation divergence regularization coefficient")
+    p.add_argument("--lambda_act", type=float, default=1e-5, help="L1 regularization coefficient for sparsity")
+    p.add_argument("--lambda_sim", type=float, default=0, help="Contrastive similarity regularization coefficient")
+    p.add_argument("--lambda_div", type=float, default=0, help="Activation divergence regularization coefficient")
     p.add_argument("--input_size", type=int, default=256, help="Input image size (assumes square images)")
 
     args = p.parse_args()
